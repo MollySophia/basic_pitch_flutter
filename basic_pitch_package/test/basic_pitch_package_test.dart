@@ -29,7 +29,39 @@ void main() {
       }
       print("Windowed audio data $i matches expected data");
       final inferenceResult = await basicPitchInstance.inference(data, false);
-      // test inference result here
+      final expectedOutputContour = File('assets/testdata/test_output_contour_$i.bin').readAsBytesSync();
+      final expectedOutputContourData = Float32List.sublistView(Uint8List.fromList(expectedOutputContour));
+      final expectedOutputNote = File('assets/testdata/test_output_note_$i.bin').readAsBytesSync();
+      final expectedOutputNoteData = Float32List.sublistView(Uint8List.fromList(expectedOutputNote));
+      final expectedOutputOnset = File('assets/testdata/test_output_onset_$i.bin').readAsBytesSync();
+      final expectedOutputOnsetData = Float32List.sublistView(Uint8List.fromList(expectedOutputOnset));
+      final noteOutput = inferenceResult[1];
+      final onsetOutput = inferenceResult[0];
+      final contourOutput = inferenceResult[2];
+      for (int j = 0; j < contourOutput[0].length; j++) {
+        for (int k = 0; k < contourOutput[0][j].length; k++) {
+          if ((expectedOutputContourData[j * contourOutput[0][j].length + k] - contourOutput[0][j][k]).abs() > 1e-5) {
+            throw ArgumentError('Output contour mismatch at index $j, $k');
+          }
+        }
+      }
+      print("Output contour $i matches expected data");
+      for (int j = 0; j < noteOutput[0].length; j++) {
+        for (int k = 0; k < noteOutput[0][j].length; k++) {
+          if ((expectedOutputNoteData[j * noteOutput[0][j].length + k] - noteOutput[0][j][k]).abs() > 1e-5) {
+            throw ArgumentError('Output note mismatch at index $j, $k');
+          }
+        }
+      }
+      print("Output note $i matches expected data");
+      for (int j = 0; j < onsetOutput[0].length; j++) {
+        for (int k = 0; k < onsetOutput[0][j].length; k++) {
+          if ((expectedOutputOnsetData[j * onsetOutput[0][j].length + k] - onsetOutput[0][j][k]).abs() > 1e-5) {
+            throw ArgumentError('Output onset mismatch at index $j, $k');
+          }
+        }
+      }
+      print("Output onset $i matches expected data\n");
     }
     basicPitchInstance.release();
   });
