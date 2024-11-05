@@ -19,7 +19,7 @@ class BasicPitch {
     _session = OrtSession.fromBuffer(bytes, sessionOptions);
   }
 
-  Future<List<List<List<List<double>>>>> inference(Float32List data, bool asyncRun) async {
+  Future<Map<String, Object>> inference(Float32List data, bool asyncRun) async {
     if (data.length != windowedAudioDataLength) {
       throw ArgumentError('Input data length must be $windowedAudioDataLength');
     }
@@ -33,14 +33,12 @@ class BasicPitch {
     } else {
       outputs = _session.run(runOptions, inputs);
     }
-    final List<List<List<List<double>>>> result = [];
-    for (final output in outputs!) {
-      final outputData = output?.value as List<List<List<double>>>;
-      result.add(outputData);
-    }
+    final List<List<List<double>>> resultContour = outputs?[2]?.value as List<List<List<double>>>;
+    final List<List<List<double>>> resultNote = outputs?[1]?.value as List<List<List<double>>>;
+    final List<List<List<double>>> resultOnset = outputs?[0]?.value as List<List<List<double>>>;
     inputOrt.release();
     runOptions.release();
-    return result;
+    return {'contour': resultContour, 'note': resultNote, 'onset': resultOnset};
   }
 
   void release() {

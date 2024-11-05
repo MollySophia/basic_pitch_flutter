@@ -35,9 +35,9 @@ void main() {
       final expectedOutputNoteData = Float32List.sublistView(Uint8List.fromList(expectedOutputNote));
       final expectedOutputOnset = File('assets/testdata/test_output_onset_$i.bin').readAsBytesSync();
       final expectedOutputOnsetData = Float32List.sublistView(Uint8List.fromList(expectedOutputOnset));
-      final noteOutput = inferenceResult[1];
-      final onsetOutput = inferenceResult[0];
-      final contourOutput = inferenceResult[2];
+      final noteOutput = inferenceResult['note'] as List<List<List<double>>>;
+      final onsetOutput = inferenceResult['onset'] as List<List<List<double>>>;
+      final contourOutput = inferenceResult['contour'] as List<List<List<double>>>;
       for (int j = 0; j < contourOutput[0].length; j++) {
         for (int k = 0; k < contourOutput[0][j].length; k++) {
           if ((expectedOutputContourData[j * contourOutput[0][j].length + k] - contourOutput[0][j][k]).abs() > 1e-5) {
