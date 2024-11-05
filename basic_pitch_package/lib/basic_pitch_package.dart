@@ -7,6 +7,8 @@ import 'package:onnxruntime/onnxruntime.dart';
 
 class BasicPitch {
   late OrtSession _session;
+  static const windowedAudioDataLength = 43844;
+  static const expectedAudioSampleRate = 22050;
 
   void init() async {
     OrtEnv.instance.init();
@@ -18,10 +20,10 @@ class BasicPitch {
   }
 
   Future<List<List<List<List<double>>>>> inference(Float32List data, bool asyncRun) async {
-    if (data.length != 43844) {
-      throw ArgumentError('Input data length must be 43844');
+    if (data.length != windowedAudioDataLength) {
+      throw ArgumentError('Input data length must be $windowedAudioDataLength');
     }
-    final shape = [1, 43844, 1];
+    final shape = [1, windowedAudioDataLength, 1];
     final inputOrt = OrtValueTensor.createTensorWithDataList(data, shape);
     final inputs = {'serving_default_input_2:0': inputOrt};
     final runOptions = OrtRunOptions();
@@ -120,7 +122,7 @@ class BasicPitch {
     final audio_out = await loadAudioMono(filePath);
     final data = audio_out['data'] as List<double>;
     final sampleRate = audio_out['sampleRate'] as int;
-    if (sampleRate != 22050) {
+    if (sampleRate != expectedAudioSampleRate) {
       // TODO: add resample support
       throw ArgumentError('Unsupported sample rate');
     }

@@ -15,14 +15,14 @@ void main() {
 
     final windowedAudioData = await basicPitchInstance.loadAudioWithPreProcess('assets/testdata/test_audio.wav');
     for (int i = 0; i < windowedAudioData.length; i++) {
-      if (windowedAudioData[i].length != 43844) {
+      if (windowedAudioData[i].length != BasicPitch.windowedAudioDataLength) {
         throw ArgumentError('Windowed audio data length must be 43844');
       }
 
       final expected = File('assets/testdata/test_input_$i.bin').readAsBytesSync();
       final expectedData = Float32List.sublistView(Uint8List.fromList(expected));
       final data = Float32List.fromList(windowedAudioData[i]);
-      for (int j = 0; j < 43844; j++) {
+      for (int j = 0; j < BasicPitch.windowedAudioDataLength; j++) {
         if ((expectedData[j] - data[j]).abs() > 1e-5) {
           throw ArgumentError('Data mismatch at index $j');
         }
