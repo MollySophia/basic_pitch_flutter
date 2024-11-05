@@ -8,9 +8,10 @@ import 'dart:typed_data';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   test('Test', () {
-    final basic_pitch = Basic_Pitch();
-    basic_pitch.init();
+    final basicPitchInstance = BasicPitch();
+    basicPitchInstance.init();
     Float32List data = Float32List(43844);
-    basic_pitch.predict(data, false);
+    final result = basicPitchInstance.predict(data, false);
+    basicPitchInstance.release();
   });
 }

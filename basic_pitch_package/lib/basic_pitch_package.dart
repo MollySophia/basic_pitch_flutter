@@ -1,9 +1,10 @@
 library basic_pitch_package;
+import 'dart:ffi';
 import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:onnxruntime/onnxruntime.dart';
 
-class Basic_Pitch {
+class BasicPitch {
   late OrtSession _session;
 
   void init() async {
@@ -15,7 +16,7 @@ class Basic_Pitch {
     _session = OrtSession.fromBuffer(bytes, sessionOptions);
   }
 
-  Future<bool> predict(Float32List data, bool asyncRun) async {
+  Future<List<List<List<List<double>>>>> predict(Float32List data, bool asyncRun) async {
     if (data.length != 43844) {
       throw ArgumentError('Input data length must be 43844');
     }
@@ -29,11 +30,17 @@ class Basic_Pitch {
     } else {
       outputs = _session.run(runOptions, inputs);
     }
-    // TODO
+    final List<List<List<List<double>>>> result = [];
+    for (final output in outputs!) {
+      final outputData = output?.value as List<List<List<double>>>;
+      result.add(outputData);
+    }
     inputOrt.release();
     runOptions.release();
-    return true;
+    return result;
   }
 
-  
+  void release() {
+    _session.release();
+  }
 }
