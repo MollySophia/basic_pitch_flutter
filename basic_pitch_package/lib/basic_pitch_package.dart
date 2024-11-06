@@ -52,9 +52,7 @@ class BasicPitch {
     _session.release();
   }
 
-  Future<Map<String, Object>> loadAudioMono(String filePath) async {
-    final file = File(filePath);
-    final bytes = await file.readAsBytes();
+  Future<Map<String, Object>> loadAudioMonoBytes(Uint8List bytes) async {
     final byteData = ByteData.sublistView(bytes);
 
     if (utf8.decode(bytes.sublist(0, 4)) != 'RIFF' || utf8.decode(bytes.sublist(8, 12)) != 'WAVE') {
@@ -123,10 +121,13 @@ class BasicPitch {
     return {'data': data, 'sampleRate': sampleRate};
   }
 
-  Future<Map<String, Object>> loadAudioWithPreProcess(String filePath) async {
-    final output = await loadAudioMono(filePath);
-    final data = output['data'] as List<double>;
-    final sampleRate = output['sampleRate'] as int;
+  Future<Map<String, Object>> loadAudioMono(String filePath) async {
+    final file = File(filePath);
+    final bytes = await file.readAsBytes();
+    return loadAudioMonoBytes(bytes);
+  }
+
+  Map<String, Object> preprocess(List<double> data, int sampleRate) {
     if (sampleRate != expectedAudioSampleRate) {
       // TODO: add resample support
       throw ArgumentError('Unsupported sample rate');
@@ -157,6 +158,20 @@ class BasicPitch {
     }
 
     return {'data': windows, 'originalAudioLength': originalAudioLength};
+  }
+
+  Future<Map<String, Object>> loadAudioWithPreProcess(String filePath) async {
+    final output = await loadAudioMono(filePath);
+    final data = output['data'] as List<double>;
+    final sampleRate = output['sampleRate'] as int;
+    return preprocess(data, sampleRate);
+  }
+
+  Future<Map<String, Object>> loadAudioBytesWithPreProcess(Uint8List bytes) async {
+    final output = await loadAudioMonoBytes(bytes);
+    final data = output['data'] as List<double>;
+    final sampleRate = output['sampleRate'] as int;
+    return preprocess(data, sampleRate);
   }
 
   List<Map<String, Object?>> postprocess(List<List<List<double>>> contour,
@@ -486,5 +501,73 @@ class BasicPitch {
     );
 
     return times;
+  }
+
+  Future<List<Map<String, Object?>>> predictFile(String filePath) async {
+    final audioData = await loadAudioWithPreProcess(filePath);
+    final data = audioData['data'] as List<List<double>>;
+    final originalAudioLength = audioData['originalAudioLength'] as int;
+
+    final contour = [];
+    final note = [];
+    final onset = [];
+    for (var window in data) {
+      final input = Float32List.fromList(window);
+      final inferenceResult = await inference(input, false);
+      final noteOutput = inferenceResult['note'] as List<List<List<double>>>;
+      final onsetOutput = inferenceResult['onset'] as List<List<List<double>>>;
+      final contourOutput = inferenceResult['contour'] as List<List<List<double>>>;
+      contour.add(contourOutput[0]);
+      note.add(noteOutput[0]);
+      onset.add(onsetOutput[0]);
+    }
+    final noteEvents = postprocess(contour.cast<List<List<double>>>(),
+      note.cast<List<List<double>>>(),
+      onset.cast<List<List<double>>>(),
+      originalAudioLength,
+      0.5,
+      0.3,
+      200,
+      80,
+      1100,
+      false,
+      true,
+      120
+    );
+    return noteEvents;
+  }
+
+  Future<List<Map<String, Object?>>> predictBytes(Uint8List bytes) async {
+    final audioData = await loadAudioBytesWithPreProcess(bytes);
+    final data = audioData['data'] as List<List<double>>;
+    final originalAudioLength = audioData['originalAudioLength'] as int;
+
+    final contour = [];
+    final note = [];
+    final onset = [];
+    for (var window in data) {
+      final input = Float32List.fromList(window);
+      final inferenceResult = await inference(input, false);
+      final noteOutput = inferenceResult['note'] as List<List<List<double>>>;
+      final onsetOutput = inferenceResult['onset'] as List<List<List<double>>>;
+      final contourOutput = inferenceResult['contour'] as List<List<List<double>>>;
+      contour.add(contourOutput[0]);
+      note.add(noteOutput[0]);
+      onset.add(onsetOutput[0]);
+    }
+    final noteEvents = postprocess(contour.cast<List<List<double>>>(),
+      note.cast<List<List<double>>>(),
+      onset.cast<List<List<double>>>(),
+      originalAudioLength,
+      0.5,
+      0.3,
+      200,
+      80,
+      1100,
+      false,
+      true,
+      120
+    );
+    return noteEvents;
   }
 }
