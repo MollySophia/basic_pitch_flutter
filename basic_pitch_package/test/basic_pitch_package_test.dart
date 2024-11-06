@@ -18,4 +18,26 @@ void main() {
     }
     basicPitchInstance.release();
   });
+
+  test('Perf', () async {
+    final basicPitchInstance = BasicPitch();
+    basicPitchInstance.init();
+
+    final audioData = await File('assets/testdata/test_audio.wav').readAsBytes();
+
+    int totalMilliseconds = 0;
+    int iterations = 100;
+
+    for (int i = 0; i < iterations; i++) {
+      final stopwatch = Stopwatch()..start();
+      await basicPitchInstance.predictBytes(audioData);
+      stopwatch.stop();
+      totalMilliseconds += stopwatch.elapsedMilliseconds;
+    }
+
+    final averageMilliseconds = totalMilliseconds / iterations;
+    print('Average performance test executed in ${averageMilliseconds.toStringAsFixed(2)} ms');
+
+    basicPitchInstance.release();
+  });
 }

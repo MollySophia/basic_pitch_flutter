@@ -84,12 +84,12 @@ class BasicPitch {
     final blockAlign = fmt.getUint16(12, Endian.little);
     final bitsPerSample = fmt.getUint16(14, Endian.little);
 
-    print('audio_format: $audioFormat');
-    print('num_channels: $numChannels');
-    print('sample_rate: $sampleRate');
-    print('byte_rate: $byteRate');
-    print('block_align: $blockAlign');
-    print('bits_per_sample: $bitsPerSample');
+    // print('audio_format: $audioFormat');
+    // print('num_channels: $numChannels');
+    // print('sample_rate: $sampleRate');
+    // print('byte_rate: $byteRate');
+    // print('block_align: $blockAlign');
+    // print('bits_per_sample: $bitsPerSample');
 
     final dataHeader = bytes.sublist(offset, offset + 8);
     if (utf8.decode(dataHeader.sublist(0, 4)) != 'data') {
