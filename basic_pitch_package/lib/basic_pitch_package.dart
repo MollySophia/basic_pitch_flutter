@@ -629,4 +629,8 @@ class BasicPitch {
       multiplePitchBends: multiplePitchBends,
       melodiaTrick: melodiaTrick);
   }
+
+  void clearLastAudioDataOverlap() {
+    _lastAudioDataOverlap = [];
+  }
 }
