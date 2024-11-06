@@ -13,7 +13,12 @@ void main() {
     final basicPitchInstance = BasicPitch();
     basicPitchInstance.init();
 
-    final windowedAudioData = await basicPitchInstance.loadAudioWithPreProcess('assets/testdata/test_audio.wav');
+    final loadedAudio = await basicPitchInstance.loadAudioWithPreProcess('assets/testdata/test_audio.wav');
+    final windowedAudioData = loadedAudio['data'] as List<List<double>>;
+    final originalAudioLength = loadedAudio['originalAudioLength'] as int;
+    final concatedOutputContour = [];
+    final concatedOutputNote = [];
+    final concatedOutputOnset = [];
     for (int i = 0; i < windowedAudioData.length; i++) {
       if (windowedAudioData[i].length != BasicPitch.windowedAudioDataLength) {
         throw ArgumentError('Windowed audio data length must be 43844');
@@ -45,6 +50,7 @@ void main() {
           }
         }
       }
+      concatedOutputContour.add(contourOutput[0]);
       print("Output contour $i matches expected data");
       for (int j = 0; j < noteOutput[0].length; j++) {
         for (int k = 0; k < noteOutput[0][j].length; k++) {
@@ -53,6 +59,7 @@ void main() {
           }
         }
       }
+      concatedOutputNote.add(noteOutput[0]);
       print("Output note $i matches expected data");
       for (int j = 0; j < onsetOutput[0].length; j++) {
         for (int k = 0; k < onsetOutput[0][j].length; k++) {
@@ -61,7 +68,26 @@ void main() {
           }
         }
       }
+      concatedOutputOnset.add(onsetOutput[0]);
       print("Output onset $i matches expected data\n");
+    }
+
+    final noteEvents = basicPitchInstance.postprocess(
+      concatedOutputContour.cast<List<List<double>>>(),
+      concatedOutputNote.cast<List<List<double>>>(),
+      concatedOutputOnset.cast<List<List<double>>>(),
+      originalAudioLength,
+      0.5,
+      0.3,
+      200,
+      80,
+      1100,
+      false,
+      true,
+      120
+    );
+    for (var note in noteEvents) {
+      print("start: ${note['start']}, end: ${note['end']}, pitch: ${note['pitch']}");
     }
     basicPitchInstance.release();
   });

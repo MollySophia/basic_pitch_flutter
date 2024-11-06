@@ -1,4 +1,5 @@
 library basic_pitch_package;
+import 'dart:math';
 import 'dart:typed_data';
 import 'dart:io';
 import 'dart:convert';
@@ -9,6 +10,12 @@ class BasicPitch {
   late OrtSession _session;
   static const windowedAudioDataLength = 43844;
   static const expectedAudioSampleRate = 22050;
+  static const overlappingFrames = 30;
+  static const fftHopSize = 256;
+  static const midiOffset = 21;
+  static const annotationsBaseFreq = 27.5;  // lowest key on a piano
+  static const annotationsNSemitones = 88;  // number of piano keys
+  static const contoursBinsPerSemitone = 3;
 
   void init() async {
     OrtEnv.instance.init();
@@ -116,17 +123,18 @@ class BasicPitch {
     return {'data': data, 'sampleRate': sampleRate};
   }
 
-  Future<List<List<double>>> loadAudioWithPreProcess(String filePath) async {
-    final audio_out = await loadAudioMono(filePath);
-    final data = audio_out['data'] as List<double>;
-    final sampleRate = audio_out['sampleRate'] as int;
+  Future<Map<String, Object>> loadAudioWithPreProcess(String filePath) async {
+    final output = await loadAudioMono(filePath);
+    final data = output['data'] as List<double>;
+    final sampleRate = output['sampleRate'] as int;
     if (sampleRate != expectedAudioSampleRate) {
       // TODO: add resample support
       throw ArgumentError('Unsupported sample rate');
     }
+    final originalAudioLength = data.length;
 
-    const windowSize = 43844;
-    const overlapLength = 7680;
+    const windowSize = windowedAudioDataLength;
+    const overlapLength = overlappingFrames * fftHopSize;
     final hopLength = windowSize - overlapLength;
     final paddedData = List<double>.filled(overlapLength ~/ 2, 0.0) + data;
 
@@ -148,6 +156,335 @@ class BasicPitch {
       windows.add(window);
     }
 
-    return windows;
+    return {'data': windows, 'originalAudioLength': originalAudioLength};
+  }
+
+  List<Map<String, Object?>> postprocess(List<List<List<double>>> contour,
+                           List<List<List<double>>> note,
+                           List<List<List<double>>> onset,
+                           int originalAudioLength,
+                           double onsetThreshold,
+                           double frameThreshold,
+                           double minimalNoteLength,
+                           double minimalFrequency,
+                           double maximalFrequency,
+                           bool multiplePitchBends,
+                           bool melodiaTrick,
+                           int midiTempo) {
+    const nOverlappingFramesSide = overlappingFrames ~/ 2;
+
+    if (nOverlappingFramesSide > 0) {
+      contour = contour.map((window) => window.sublist(nOverlappingFramesSide, window.length - nOverlappingFramesSide)).toList();
+      note = note.map((window) => window.sublist(nOverlappingFramesSide, window.length - nOverlappingFramesSide)).toList();
+      onset = onset.map((window) => window.sublist(nOverlappingFramesSide, window.length - nOverlappingFramesSide)).toList();
+    }
+
+    final nOutputFramesOriginal = (originalAudioLength * ((expectedAudioSampleRate / fftHopSize).floor() / expectedAudioSampleRate)).floor();
+    final unwrappedContour = contour.expand((window) => window).toList();
+    final unwrappedNote = note.expand((window) => window).toList();
+    final unwrappedOnset = onset.expand((window) => window).toList();
+
+    final truncatedContour = unwrappedContour.sublist(0, nOutputFramesOriginal);
+    final truncatedNote = unwrappedNote.sublist(0, nOutputFramesOriginal);
+    final truncatedOnset = unwrappedOnset.sublist(0, nOutputFramesOriginal);
+    final minimalNoteLengthFrames = (minimalNoteLength / 1000 * (expectedAudioSampleRate / fftHopSize)).round();
+
+    final noteEvents = decodePolyphonicNotes(truncatedNote, truncatedOnset, onsetThreshold, frameThreshold, minimalNoteLengthFrames, true, maximalFrequency, minimalFrequency, melodiaTrick, 11);
+    final noteEventsWithPitchBends = getPitchBends(truncatedContour, noteEvents);
+    
+    final audioDurationInSeconds = modelFramesToTime(truncatedContour.length);
+    final noteEventsWithSeconds = noteEventsWithPitchBends.map((note) {
+      final start = audioDurationInSeconds[note['start'] as int];
+      final end = audioDurationInSeconds[note['end'] as int];
+      final pitch = note['pitch'];
+      final amplitude = note['amplitude'];
+      final bends = note['bends'];
+      return {'start': start, 'end': end, 'pitch': pitch, 'amplitude': amplitude, 'bends': bends};
+    }).toList();
+    return noteEventsWithSeconds;
+  }
+
+  List<List<double>> getInferedOnsets(List<List<double>> onsets, List<List<double>> frames, {int nDiff = 2}) {
+    final nFrames = frames.length;
+    final nBins = frames[0].length;
+    final diffs = List.generate(nDiff, (_) => List.generate(nFrames, (_) => List.filled(nBins, 0.0)));
+
+    for (int n = 1; n <= nDiff; n++) {
+      for (int i = n; i < nFrames; i++) {
+        for (int j = 0; j < nBins; j++) {
+          diffs[n - 1][i][j] = frames[i][j] - frames[i - n][j];
+        }
+      }
+    }
+
+    final frameDiff = List.generate(nFrames, (_) => List.filled(nBins, 0.0));
+    for (int i = 0; i < nFrames; i++) {
+      for (int j = 0; j < nBins; j++) {
+        frameDiff[i][j] = diffs.map((diff) => diff[i][j]).reduce((a, b) => a < b ? a : b);
+        if (frameDiff[i][j] < 0) frameDiff[i][j] = 0;
+      }
+    }
+
+    for (int i = 0; i < nDiff; i++) {
+      for (int j = 0; j < nBins; j++) {
+        frameDiff[i][j] = 0;
+      }
+    }
+
+    final maxOnsets = onsets.expand((e) => e).reduce((a, b) => a > b ? a : b);
+    final maxFrameDiff = frameDiff.expand((e) => e).reduce((a, b) => a > b ? a : b);
+
+    for (int i = 0; i < nFrames; i++) {
+      for (int j = 0; j < nBins; j++) {
+        frameDiff[i][j] = maxOnsets * frameDiff[i][j] / maxFrameDiff;
+      }
+    }
+
+    final maxOnsetsDiff = List.generate(nFrames, (_) => List.filled(nBins, 0.0));
+    for (int i = 0; i < nFrames; i++) {
+      for (int j = 0; j < nBins; j++) {
+        maxOnsetsDiff[i][j] = onsets[i][j] > frameDiff[i][j] ? onsets[i][j] : frameDiff[i][j];
+      }
+    }
+
+    return maxOnsetsDiff;
+  }
+
+  List<Map<String, Object>> decodePolyphonicNotes(
+        List<List<double>> frames,
+        List<List<double>> onset,
+        double onsetThreshold,
+        double frameThreshold,
+        int minimalNoteLengthFrames,
+        bool inferOnsets,
+        double maximalFrequency,
+        double minimalFrequency,
+        bool melodiaTrick,
+        int energyTol
+  ) {
+    final nFrames = frames.length;
+
+    // set frequency outside of [minimalFrequency, maximalFrequency] to 0
+    // hz_to_midi: 12 * (log2(freq) - log2(440)) + 69
+    final maxFreqIdx = (12 * (log(maximalFrequency / 440) / ln2)).round() + 69 - midiOffset;
+    for (var frame in frames) {
+      for (var i = maxFreqIdx; i < frame.length; i++) {
+        frame[i] = 0;
+      }
+    }
+    for (var onsetFrame in onset) {
+      for (var i = maxFreqIdx; i < onsetFrame.length; i++) {
+        onsetFrame[i] = 0;
+      }
+    }
+
+    final minFreqIdx = (12 * (log(minimalFrequency / 440) / ln2)).round() + 69 - midiOffset;
+    for (var frame in frames) {
+      for (var i = 0; i < minFreqIdx; i++) {
+        frame[i] = 0;
+      }
+    }
+    for (var onsetFrame in onset) {
+      for (var i = 0; i < minFreqIdx; i++) {
+        onsetFrame[i] = 0;
+      }
+    }
+
+    if (inferOnsets) {
+      onset = getInferedOnsets(onset, frames);
+    }
+
+    final onsetPeakX = [];
+    final onsetPeakY = [];
+    for (int j = nFrames - 1; j >= 0; j--) {
+      for (int i = 0; i < onset[0].length; i++) {
+        if (j != 0 && j != nFrames - 1) {
+          if (onset[j][i] > onset[j - 1][i] && onset[j][i] > onset[j + 1][i]) {
+            if (onset[j][i] >= onsetThreshold) {
+              onsetPeakX.add(j);
+              onsetPeakY.add(i);
+            }
+          }
+        }
+      }
+    }
+
+    final remainingEnergy = List.generate(frames.length, (i) => List<double>.from(frames[i]));
+
+    final noteEvents = <Map<String, Object>>[];
+    for (int idx = 0; idx < onsetPeakX.length; idx++) {
+      final noteStartIdx = onsetPeakX[idx];
+      final freqIdx = onsetPeakY[idx];
+
+      if (noteStartIdx >= nFrames - 1) continue;
+
+      int i = noteStartIdx + 1;
+      int k = 0;
+      while (i < nFrames - 1 && k < energyTol) {
+        if (remainingEnergy[i][freqIdx] < frameThreshold) {
+          k++;
+        } else {
+          k = 0;
+        }
+        i++;
+      }
+
+      i -= k;
+
+      if (i - noteStartIdx <= minimalNoteLengthFrames) continue;
+
+      for (int j = noteStartIdx; j < i; j++) {
+        remainingEnergy[j][freqIdx] = 0;
+        if (freqIdx < maxFreqIdx) remainingEnergy[j][freqIdx + 1] = 0;
+        if (freqIdx > 0) remainingEnergy[j][freqIdx - 1] = 0;
+      }
+
+      final amplitude = frames.sublist(noteStartIdx, i).map((frame) => frame[freqIdx]).reduce((a, b) => a + b) / (i - noteStartIdx);
+      noteEvents.add({
+        'start': noteStartIdx,
+        'end': i,
+        'pitch': freqIdx + midiOffset,
+        'amplitude': amplitude,
+      });
+    }
+
+    if (melodiaTrick) {
+      final energyShape = remainingEnergy.length;
+
+      while (remainingEnergy.expand((e) => e).reduce((a, b) => a > b ? a : b) > frameThreshold) {
+        final maxIndex = remainingEnergy.expand((e) => e).toList().indexOf(remainingEnergy.expand((e) => e).reduce((a, b) => a > b ? a : b));
+        final iMid = maxIndex ~/ remainingEnergy[0].length;
+        final freqIdx = maxIndex % remainingEnergy[0].length;
+        remainingEnergy[iMid][freqIdx] = 0;
+
+        // forward pass
+        int i = iMid + 1;
+        int k = 0;
+        while (i < nFrames - 1 && k < energyTol) {
+          if (remainingEnergy[i][freqIdx] < frameThreshold) {
+            k++;
+          } else {
+            k = 0;
+          }
+
+          remainingEnergy[i][freqIdx] = 0;
+          if (freqIdx < maxFreqIdx) {
+            remainingEnergy[i][freqIdx + 1] = 0;
+          }
+          if (freqIdx > 0) {
+            remainingEnergy[i][freqIdx - 1] = 0;
+          }
+
+          i++;
+        }
+
+        final iEnd = i - 1 - k;
+
+        // backward pass
+        i = iMid - 1;
+        k = 0;
+        while (i > 0 && k < energyTol) {
+          if (remainingEnergy[i][freqIdx] < frameThreshold) {
+            k++;
+          } else {
+            k = 0;
+          }
+
+          remainingEnergy[i][freqIdx] = 0;
+          if (freqIdx < maxFreqIdx) {
+            remainingEnergy[i][freqIdx + 1] = 0;
+          }
+          if (freqIdx > 0) {
+            remainingEnergy[i][freqIdx - 1] = 0;
+          }
+
+          i--;
+        }
+
+        final iStart = i + 1 + k;
+        assert(iStart >= 0);
+        assert(iEnd < nFrames);
+
+        if (iEnd - iStart <= minimalNoteLengthFrames) {
+          continue;
+        }
+
+        final amplitude = frames.sublist(iStart, iEnd).map((frame) => frame[freqIdx]).reduce((a, b) => a + b) / (iEnd - iStart);
+        noteEvents.add({
+          'start': iStart,
+          'end': iEnd,
+          'pitch': freqIdx + midiOffset,
+          'amplitude': amplitude,
+        });
+      }
+    }
+
+    return noteEvents;
+  }
+
+  List<Map<String, Object>> getPitchBends(
+      List<List<double>> contours,
+      List<Map<String, Object>> noteEvents,
+      {int nBinsTolerance = 25}) {
+    final windowLength = nBinsTolerance * 2 + 1;
+    final freqGaussian = List.generate(windowLength, (i) => exp(-0.5 * pow((i - nBinsTolerance) / 5, 2)));
+
+    final noteEventsWithPitchBends = <Map<String, Object>>[];
+    for (var noteEvent in noteEvents) {
+      final startIdx = noteEvent['start'] as int;
+      final endIdx = noteEvent['end'] as int;
+      final pitchMidi = noteEvent['pitch'] as int;
+      final amplitude = noteEvent['amplitude'] as double;
+
+      // midi_pitch_to_contour_bin: 
+      // pitch_hz = midi_to_hz(pitchMidi) = 2 ^ ((pitchMidi - 69) / 12) * 440
+      // freqIdx = 12 * contoursBinsPerSemitone * log2(pitch_hz / annotationsBaseFreq)
+      // = 36 * log2(2 ^ ((pitchMidi - 69) / 12) * 440 / annotationsBaseFreq)
+      final freqIdx = (12 * contoursBinsPerSemitone * log(pow(2, (pitchMidi - 69) / 12) * 440 / annotationsBaseFreq) / ln2).round();
+      final freqStartIdx = max(freqIdx - nBinsTolerance, 0);
+      final freqEndIdx = min(annotationsNSemitones * contoursBinsPerSemitone, freqIdx + nBinsTolerance + 1);
+
+      final pitchBendSubmatrix = List.generate(
+        endIdx - startIdx,
+        (i) => List.generate(
+          freqEndIdx - freqStartIdx,
+          (j) => contours[startIdx + i][freqStartIdx + j] *
+          freqGaussian[max(0, nBinsTolerance - freqIdx) + j],
+        ),
+      );
+
+      final pbShift = nBinsTolerance - max(0, nBinsTolerance - freqIdx);
+      final bends = pitchBendSubmatrix.map((row) => row.indexOf(row.reduce(max)) - pbShift).toList();
+
+      noteEventsWithPitchBends.add({
+        'start': startIdx,
+        'end': endIdx,
+        'pitch': pitchMidi,
+        'amplitude': amplitude,
+        'bends': bends,
+      });
+    }
+
+    return noteEventsWithPitchBends;
+  }
+
+  List<double> modelFramesToTime(int nFrames) {
+    final originalTimes = List.generate(
+      nFrames,
+      (i) => i * fftHopSize / expectedAudioSampleRate,
+    );
+
+    const audioWindowLength = 2;
+    const audioNSamples = expectedAudioSampleRate * audioWindowLength - fftHopSize;
+    const annotNFrames = expectedAudioSampleRate ~/ fftHopSize * audioWindowLength;
+    final windowNumbers = List.generate(nFrames, (i) => (i / annotNFrames).floor());
+    const windowOffset = (fftHopSize / expectedAudioSampleRate) * (annotNFrames - (audioNSamples / fftHopSize)) + 0.0018;
+
+    final times = List.generate(
+      nFrames,
+      (i) => originalTimes[i] - (windowOffset * windowNumbers[i]),
+    );
+
+    return times;
   }
 }
