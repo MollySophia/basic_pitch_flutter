@@ -1,9 +1,6 @@
-import 'dart:ffi';
-
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:basic_pitch_package/basic_pitch_package.dart';
-import 'dart:typed_data';
 import 'dart:io';
 import 'dart:core';
 
