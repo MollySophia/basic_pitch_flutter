@@ -17,6 +17,8 @@ class BasicPitch {
   static const annotationsNSemitones = 88;  // number of piano keys
   static const contoursBinsPerSemitone = 3;
 
+  List<double> _lastAudioDataOverlap = [];
+
   void init() async {
     OrtEnv.instance.init();
     final sessionOptions = OrtSessionOptions();
@@ -184,8 +186,7 @@ class BasicPitch {
                            double minimalFrequency,
                            double maximalFrequency,
                            bool multiplePitchBends,
-                           bool melodiaTrick,
-                           int midiTempo) {
+                           bool melodiaTrick) {
     const nOverlappingFramesSide = overlappingFrames ~/ 2;
 
     if (nOverlappingFramesSide > 0) {
@@ -503,11 +504,15 @@ class BasicPitch {
     return times;
   }
 
-  Future<List<Map<String, Object?>>> predictFile(String filePath) async {
-    final audioData = await loadAudioWithPreProcess(filePath);
-    final data = audioData['data'] as List<List<double>>;
-    final originalAudioLength = audioData['originalAudioLength'] as int;
-
+  Future<List<Map<String, Object?>>> predict(List<List<double>> data,
+      int originalAudioLength,
+      {double onsetThreshold = 0.5,
+      double frameThreshold = 0.3,
+      double minimalNoteLength = 200,
+      double minimalFrequency = 80,
+      double maximalFrequency = 1100,
+      bool multiplePitchBends = false,
+      bool melodiaTrick = true}) async {
     final contour = [];
     final note = [];
     final onset = [];
@@ -525,49 +530,103 @@ class BasicPitch {
       note.cast<List<List<double>>>(),
       onset.cast<List<List<double>>>(),
       originalAudioLength,
-      0.5,
-      0.3,
-      200,
-      80,
-      1100,
-      false,
-      true,
-      120
+      onsetThreshold,
+      frameThreshold,
+      minimalNoteLength,
+      minimalFrequency,
+      maximalFrequency,
+      multiplePitchBends,
+      melodiaTrick
     );
     return noteEvents;
   }
 
-  Future<List<Map<String, Object?>>> predictBytes(Uint8List bytes) async {
+  Future<List<Map<String, Object?>>> predictFile(
+      String filePath,
+      {double onsetThreshold = 0.5,
+      double frameThreshold = 0.3,
+      double minimalNoteLength = 200,
+      double minimalFrequency = 80,
+      double maximalFrequency = 1100,
+      bool multiplePitchBends = false,
+      bool melodiaTrick = true}) async {
+    final audioData = await loadAudioWithPreProcess(filePath);
+    final data = audioData['data'] as List<List<double>>;
+    final originalAudioLength = audioData['originalAudioLength'] as int;
+
+    return predict(data, originalAudioLength,
+      onsetThreshold: onsetThreshold,
+      frameThreshold: frameThreshold,
+      minimalNoteLength: minimalNoteLength,
+      minimalFrequency: minimalFrequency,
+      maximalFrequency: maximalFrequency,
+      multiplePitchBends: multiplePitchBends,
+      melodiaTrick: melodiaTrick);
+  }
+
+  Future<List<Map<String, Object?>>> predictBytes(Uint8List bytes,
+      {double onsetThreshold = 0.5,
+      double frameThreshold = 0.3,
+      double minimalNoteLength = 200,
+      double minimalFrequency = 80,
+      double maximalFrequency = 1100,
+      bool multiplePitchBends = false,
+      bool melodiaTrick = true}) async {
     final audioData = await loadAudioBytesWithPreProcess(bytes);
     final data = audioData['data'] as List<List<double>>;
     final originalAudioLength = audioData['originalAudioLength'] as int;
 
-    final contour = [];
-    final note = [];
-    final onset = [];
-    for (var window in data) {
-      final input = Float32List.fromList(window);
-      final inferenceResult = await inference(input, false);
-      final noteOutput = inferenceResult['note'] as List<List<List<double>>>;
-      final onsetOutput = inferenceResult['onset'] as List<List<List<double>>>;
-      final contourOutput = inferenceResult['contour'] as List<List<List<double>>>;
-      contour.add(contourOutput[0]);
-      note.add(noteOutput[0]);
-      onset.add(onsetOutput[0]);
+    return predict(data, originalAudioLength,
+      onsetThreshold: onsetThreshold,
+      frameThreshold: frameThreshold,
+      minimalNoteLength: minimalNoteLength,
+      minimalFrequency: minimalFrequency,
+      maximalFrequency: maximalFrequency,
+      multiplePitchBends: multiplePitchBends,
+      melodiaTrick: melodiaTrick);
+  }
+
+  // Please make sure the sample rate equals 22050, pcm data is mono and 16-bit
+  // num of samples should be windowedAudioDataLength - overlappingFrames * fftHopSize * 0.5
+  Future<List<Map<String, Object?>>> predictStreamingPcmMono(Uint8List bytes,
+      int sampleRate,
+      {double onsetThreshold = 0.5,
+      double frameThreshold = 0.3,
+      double minimalNoteLength = 200,
+      double minimalFrequency = 80,
+      double maximalFrequency = 1100,
+      bool multiplePitchBends = false,
+      bool melodiaTrick = true}) async {
+
+    if (sampleRate != expectedAudioSampleRate) {
+      throw ArgumentError('Unsupported sample rate');
     }
-    final noteEvents = postprocess(contour.cast<List<List<double>>>(),
-      note.cast<List<List<double>>>(),
-      onset.cast<List<List<double>>>(),
-      originalAudioLength,
-      0.5,
-      0.3,
-      200,
-      80,
-      1100,
-      false,
-      true,
-      120
-    );
-    return noteEvents;
+
+    List<double> data;
+    final int16Data = Int16List.sublistView(Uint8List.fromList(bytes));
+    data = int16Data.map((e) => e / 32768.0).toList();
+    int originalAudioLength = data.length;
+    const overlapLengthHalf = overlappingFrames * fftHopSize ~/ 2;
+    if (originalAudioLength != windowedAudioDataLength - overlapLengthHalf) {
+      throw ArgumentError('Input data length must be ${windowedAudioDataLength - overlapLengthHalf}');
+    }
+
+    if (_lastAudioDataOverlap.isEmpty) {
+      _lastAudioDataOverlap = List<double>.filled(overlapLengthHalf, 0.0);
+    }
+    final paddedData = _lastAudioDataOverlap + data;
+    _lastAudioDataOverlap = data.sublist(data.length - overlapLengthHalf);
+    originalAudioLength = paddedData.length;
+    assert (originalAudioLength == windowedAudioDataLength);
+    List<List<double>> input = [paddedData];
+    
+    return predict(input, originalAudioLength,
+      onsetThreshold: onsetThreshold,
+      frameThreshold: frameThreshold,
+      minimalNoteLength: minimalNoteLength,
+      minimalFrequency: minimalFrequency,
+      maximalFrequency: maximalFrequency,
+      multiplePitchBends: multiplePitchBends,
+      melodiaTrick: melodiaTrick);
   }
 }
