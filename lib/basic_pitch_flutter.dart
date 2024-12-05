@@ -22,7 +22,7 @@ class BasicPitch {
   void init() async {
     OrtEnv.instance.init();
     final sessionOptions = OrtSessionOptions();
-    const modelPath = 'assets/models/nmp.onnx';
+    const modelPath = 'packages/basic_pitch_package/assets/models/nmp.onnx';
     final rawAssetFile = await rootBundle.load(modelPath);
     final bytes = rawAssetFile.buffer.asUint8List();
     _session = OrtSession.fromBuffer(bytes, sessionOptions);
