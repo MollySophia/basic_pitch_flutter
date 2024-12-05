@@ -1,4 +1,4 @@
-library basic_pitch_package;
+library basic_pitch_flutter;
 import 'dart:math';
 import 'dart:typed_data';
 import 'dart:io';
@@ -22,7 +22,7 @@ class BasicPitch {
   void init() async {
     OrtEnv.instance.init();
     final sessionOptions = OrtSessionOptions();
-    const modelPath = 'packages/basic_pitch_package/assets/models/nmp.onnx';
+    const modelPath = 'packages/basic_pitch_flutter/assets/models/nmp.onnx';
     final rawAssetFile = await rootBundle.load(modelPath);
     final bytes = rawAssetFile.buffer.asUint8List();
     _session = OrtSession.fromBuffer(bytes, sessionOptions);
