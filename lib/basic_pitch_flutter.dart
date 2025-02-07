@@ -94,7 +94,8 @@ class BasicPitch {
     // print('bits_per_sample: $bitsPerSample');
 
     final dataHeader = bytes.sublist(offset, offset + 8);
-    if (utf8.decode(dataHeader.sublist(0, 4)) != 'data') {
+    if (utf8.decode(dataHeader.sublist(0, 4)) != 'data' &&
+        utf8.decode(dataHeader.sublist(0, 4)) != 'FLLR' ) {
       throw const FormatException('Unsupported data header');
     }
     final dataSize = byteData.getUint32(offset + 4, Endian.little);
@@ -138,7 +139,7 @@ class BasicPitch {
 
     const windowSize = windowedAudioDataLength;
     const overlapLength = overlappingFrames * fftHopSize;
-    final hopLength = windowSize - overlapLength;
+    const hopLength = windowSize - overlapLength;
     final paddedData = List<double>.filled(overlapLength ~/ 2, 0.0) + data;
 
     final totalSamples = paddedData.length;
